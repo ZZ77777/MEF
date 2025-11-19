@@ -1,2 +1,2 @@
 # MEF
-Repository for personal testing of the flow model
+Personal repository for testing and experimenting with the flow model
