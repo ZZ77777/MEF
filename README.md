@@ -1,2 +1,2 @@
 # MEF
-A PyTorch implementation of Generative Flows with Matrix Exponential.
+Repository for personal testing of the flow model
