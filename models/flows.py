@@ -9,6 +9,8 @@ import torch.nn.functional as F
 from models.utils import expm, series
 
 eps = 1e-8
+### Epsilon para evitar divisiones por cero
+### Primera vez que lo veo
 
 
 class ActNorm(nn.Module):
