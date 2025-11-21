@@ -496,12 +496,12 @@ def get_dataset(args):
     """
     if args.dataset == 'cifar10':
         ### CIFAR-10 (32x32 imágenes RGB): 50k train, 10k test
-        train_data = datasets.CIFAR10(args.dataset_dir, train=True,
+        train_data = datasets.CIFAR10(args.dataset_dir, train=True, download=True, #### Añadido download para prueba
                                       transform=transforms.Compose([
                                           transforms.RandomHorizontalFlip(), ### Data augmentation
                                           transforms.ToTensor() ### Convertir a tensor [0, 1]
                                       ]))
-        test_data = datasets.CIFAR10(args.dataset_dir, train=False,
+        test_data = datasets.CIFAR10(args.dataset_dir, train=False,  download=True, #### Añadido download para prueba
                                      transform=transforms.Compose([
                                          transforms.ToTensor()
                                      ]))
