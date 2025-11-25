@@ -15,6 +15,7 @@ from optim.adam import Adam
 from optim.adamax import Adamax
 from models.nets import Model
 from models.utils import preprocess, postprocess
+from tracking import TrainingTracker
 
 
 """
@@ -261,6 +262,8 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             init_data = preprocess(init_data, args.bits, z)
             ### Forward pass de inicialización
             _, _ = model(init_data, init=True)
+            
+        tracker = TrainingTracker(save_dir) ### para seguir el entrenamiento
 
     print('start training') ### BUCLE PRINCIPAL DE ENTRENAMIENTO
     for epoch in range(start_epoch, args.epochs + 1):
@@ -288,11 +291,15 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             ### Loss = -log p(x) donde p(x) se calcula usando change of variables
             loss = compute_loss(args, output, log_det)
             
+            tracker.log_batch(loss.item() / (np.log(2) * args.dimension), 
+                  log_det.mean().item()) ### 
+            
             ### Convertir a bits por dimensión (métrica estándar en normalizing flows)
             train_log['train_loss'].append(loss.item() / (np.log(2) * args.dimension))
             
             total_loss += loss.item() * data.size(0)
             number += data.size(0)
+            
             
             ### BACKWARD PASS Y ACTUALIZACIÓN
             ### Limpiar gradientes previos, calcular nuevos y actualizar parámetros
@@ -315,6 +322,8 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
         ### Actualizar learning rate según el scheduler
         scheduler.step()
         
+        tracker.log_epoch(epoch, bits_per_dim, test_loss if 'test_loss' in locals() else None) ###
+        
         ### EVALUACIÓN PERIÓDICA
         if not (epoch % args.test_interval):
             ### Evaluar con parámetros promediados con Polyak averaging
@@ -334,6 +343,9 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
         ### GUARDAR CHECKPOINT PERIÓDICAMENTE
         if not (epoch % args.save_interval):
             save(save_dir, epoch, train_log, model, optimizer, scheduler)
+            
+    print("Training finished")
+    tracker.save_summary()
     return
 
 
