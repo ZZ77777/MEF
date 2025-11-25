@@ -1,0 +1,1 @@
+python main.py --mode train --dataset cifar10 --dataset_dir ./datasets --save_dir ./experiments/cifar10_test --epochs 5 --batch_size 32 --test_interval 1 --save_interval 1 --device cpu --workers 4 --lr 0.001

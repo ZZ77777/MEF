@@ -10,12 +10,13 @@ import torch
 import torch.optim
 import torchvision
 from torchvision import datasets, transforms
+from tqdm import tqdm
 
 from optim.adam import Adam
 from optim.adamax import Adamax
 from models.nets import Model
 from models.utils import preprocess, postprocess
-from tracking import TrainingTracker
+from tracking import TrainingMonitor
 
 
 """
@@ -236,6 +237,8 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
     lr_lambda = lambda step: (step + 1) / (len(train_loader) * args.warmup_epoch)
     warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    ### Inicializar tracker para seguir el entrenamiento
+    tracker = TrainingMonitor(save_dir)
 
     ### Reanudar entrenamiento desde checkpoint si se especifica  
     if args.resume_epoch is not None:
@@ -262,8 +265,6 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             init_data = preprocess(init_data, args.bits, z)
             ### Forward pass de inicialización
             _, _ = model(init_data, init=True)
-            
-        tracker = TrainingTracker(save_dir) ### para seguir el entrenamiento
 
     print('start training') ### BUCLE PRINCIPAL DE ENTRENAMIENTO
     for epoch in range(start_epoch, args.epochs + 1):
@@ -272,8 +273,9 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
         number = 0 ### Total de muestras procesadas
         t0 = time.time()
 
-        ### Iteración sobre batches 
-        for data, _ in train_loader: 
+        ### Iteración sobre batches con barra de progreso
+        pbar = tqdm(train_loader, desc=f'Época {epoch}/{args.epochs}', unit='batch')
+        for batch_idx, (data, _) in enumerate(pbar): 
             data = data.to(device)
             
             ### DEQUANTIZACIÓN
@@ -291,11 +293,10 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             ### Loss = -log p(x) donde p(x) se calcula usando change of variables
             loss = compute_loss(args, output, log_det)
             
-            tracker.log_batch(loss.item() / (np.log(2) * args.dimension), 
-                  log_det.mean().item()) ### 
+            bits_per_dim = loss.item() / (np.log(2) * args.dimension)
             
             ### Convertir a bits por dimensión (métrica estándar en normalizing flows)
-            train_log['train_loss'].append(loss.item() / (np.log(2) * args.dimension))
+            train_log['train_loss'].append(bits_per_dim)
             
             total_loss += loss.item() * data.size(0)
             number += data.size(0)
@@ -304,28 +305,47 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             ### BACKWARD PASS Y ACTUALIZACIÓN
             ### Limpiar gradientes previos, calcular nuevos y actualizar parámetros
             optimizer.zero_grad()
-            loss.backward()         
+            loss.backward()
+            
+            ### Gradient clipping para estabilidad numérica
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+            
+            ### LOG TRACKING (después de backward, antes de step y zero_grad siguiente)
+            current_lr = optimizer.param_groups[0]['lr']
+            tracker.log_batch(batch_idx, bits_per_dim, log_det.mean().item(), model, current_lr)
+            
             optimizer.step()        
             
             ### Aplicar warmup scheduler durante las primeras épocas
             if epoch <= args.warmup_epoch:
                 warmup_scheduler.step()
+            
+            ### Actualizar barra de progreso con métricas en tiempo real
+            pbar.set_postfix({
+                'loss': f'{bits_per_dim:.4f}',
+                'lr': f'{current_lr:.2e}'
+            })
 
         ### MÉTRICAS DE LA ÉPOCA
         bits_per_dim = total_loss / number / (np.log(2) * args.dimension)
         train_log['epoch_loss'].append((epoch, bits_per_dim))
         
         t1 = time.time()
-        train_log['epoch_time'].append((epoch, t1 - t0))
-        print('[train:epoch {}]. loss: {:.8f},time:{:.1f}s '.format(epoch, bits_per_dim, t1 - t0))
+        epoch_time = t1 - t0
+        train_log['epoch_time'].append((epoch, epoch_time))
+        
+        ### Mostrar resumen de época
+        print(f'\n╔════════════════════════════════════════════╗')
+        print(f'║ Época {epoch}/{args.epochs} - Loss: {bits_per_dim:.6f} bits/dim | Tiempo: {epoch_time:.1f}s')
+        print(f'╚════════════════════════════════════════════╝\n')
         
         ### Actualizar learning rate según el scheduler
         scheduler.step()
         
-        tracker.log_epoch(epoch, bits_per_dim, test_loss if 'test_loss' in locals() else None) ###
-        
         ### EVALUACIÓN PERIÓDICA
+        test_loss = None
         if not (epoch % args.test_interval):
+            print(f'Evaluando en conjunto de validación...')
             ### Evaluar con parámetros promediados con Polyak averaging
             optimizer.swap()
             test_loss = test(args, device, model, test_loader, epoch)
@@ -335,17 +355,28 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             test_loss1 = test(args, device, model, test_loader, epoch)
             train_log['test_loss'].append((epoch, test_loss, test_loss1))
             
+            ### Log epoch después de obtener test_loss
+            tracker.log_epoch(epoch, bits_per_dim, test_loss, epoch_time)
+            
+            ### Mostrar gap entre train y test
+            gap = test_loss - bits_per_dim
+            gap_indicator = "📈 Overfitting" if gap > 0.5 else "✓ Normal" if gap > 0 else "✓ Muy bueno"
+            print(f'\n┌─ TEST LOSS (Polyak avg): {test_loss:.6f} bits/dim | Gap: {gap:.4f} {gap_indicator}')
+            print(f'└─ TEST LOSS (Current):   {test_loss1:.6f} bits/dim\n')
+            
             ### Guardar mejor modelo
             if test_loss < best_loss:
                 best_loss = test_loss
                 save(save_dir, epoch, train_log, model, optimizer, scheduler, is_best=True)
+        else:
+            ### Log epoch sin test_loss
+            tracker.log_epoch(epoch, bits_per_dim, None, epoch_time)
                 
         ### GUARDAR CHECKPOINT PERIÓDICAMENTE
         if not (epoch % args.save_interval):
             save(save_dir, epoch, train_log, model, optimizer, scheduler)
             
     print("Training finished")
-    tracker.save_summary()
     return
 
 
@@ -383,7 +414,8 @@ def test(args, device, model, test_loader, epoch):
     model.eval() ### Modo evaluación (deshabilita dropout, etc.)
     
     with torch.no_grad(): ### No calcular gradientes para ahorrar tiempo y memoria
-        for data, _ in test_loader:
+        pbar = tqdm(test_loader, desc=f'Test Época {epoch}', unit='batch', leave=False)
+        for data, _ in pbar:
             data = data.to(device)
             
             ### Dequantización (igual que en entrenamiento)
@@ -400,7 +432,6 @@ def test(args, device, model, test_loader, epoch):
             
     ### Pasar a bits por dimensión
     bits_per_dim = total_loss / number / (np.log(2) * args.dimension)
-    print('[test:epoch {}]. loss: {:.8f} '.format(epoch, bits_per_dim))
     return bits_per_dim
 
 
