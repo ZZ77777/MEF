@@ -290,7 +290,7 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             output, log_det = model(data)
             
             ### CALCULAR LOSS
-            ### Loss = -log p(x) donde p(x) se calcula usando change of variables
+            ### Loss = -log p(x) 
             loss = compute_loss(args, output, log_det)
             
             bits_per_dim = loss.item() / (np.log(2) * args.dimension)
@@ -360,7 +360,7 @@ def train(args, device, save_dir, model, optimizer, scheduler, train_loader, tes
             
             ### Mostrar gap entre train y test
             gap = test_loss - bits_per_dim
-            gap_indicator = "📈 Overfitting" if gap > 0.5 else "✓ Normal" if gap > 0 else "✓ Muy bueno"
+            gap_indicator = "Overfitting" if gap > 0.5 else "Normal" if gap > 0 else "Bueno"
             print(f'\n┌─ TEST LOSS (Polyak avg): {test_loss:.6f} bits/dim | Gap: {gap:.4f} {gap_indicator}')
             print(f'└─ TEST LOSS (Current):   {test_loss1:.6f} bits/dim\n')
             
