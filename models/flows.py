@@ -621,7 +621,7 @@ class CouplingLayer(nn.Module):
                     weight2 = self.rescale * torch.tanh(self.scale * weight2 + self.shift) + self.reshift + eps
                     weight3 = torch.matmul(weight1, weight2)
 
-                    # Inversa: W-1 = I - B * series(-AB^T) * A^T
+                    ### Inversa: W-1 = I - B * series(-AB^T) * A^T
                     weight = torch.eye(self.x2_channels, device=x.device) - torch.matmul(
                         torch.matmul(weight2, series(-weight3)), weight1)
                     
